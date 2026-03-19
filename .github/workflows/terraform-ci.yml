@@ -1,0 +1,81 @@
+# ============================================================
+# terraform-ci.yml — GitHub Actions CI Pipeline
+#
+# Tự động chạy mỗi khi push code lên nhánh main
+# hoặc tạo Pull Request vào main
+#
+# Jobs:
+#   1. Checkout code
+#   2. Setup Terraform
+#   3. terraform init  → kết nối HCP Terraform
+#   4. terraform fmt   → kiểm tra format code
+#   5. terraform validate → kiểm tra syntax
+#   6. terraform plan  → xem trước thay đổi
+# ============================================================
+name: "🔄 Terraform CI — Validate & Plan"
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+env:
+  # Token kết nối HCP Terraform — lưu trong GitHub Secrets
+  # Cách thêm: GitHub Repo → Settings → Secrets → Actions
+  # → New secret: TF_API_TOKEN = vQfORdByqNYS8g.atlasv1.IARw...
+  TF_TOKEN_app_terraform_io: ${{ secrets.TF_API_TOKEN }}
+
+jobs:
+  terraform:
+    name: "Terraform Validate & Plan"
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: "📥 Checkout code"
+        uses: actions/checkout@v4
+
+      - name: "🔧 Setup Terraform v1.7.0"
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.7.0"
+
+      - name: "🔗 Terraform Init"
+        run: terraform init
+        # Kết nối HCP Terraform qua TF_TOKEN env var
+        # Download providers từ Registry
+
+      - name: "✨ Terraform Format Check"
+        run: terraform fmt -check -recursive
+        # Kiểm tra code có đúng format không
+        # Nếu sai format → CI fail → phải chạy terraform fmt local
+
+      - name: "✅ Terraform Validate"
+        run: terraform validate
+        # Kiểm tra syntax và logic của tất cả .tf files
+        # Không cần AWS/Proxmox credentials để validate
+
+      - name: "📋 Terraform Plan"
+        run: |
+          terraform plan \
+            -no-color \
+            -input=false \
+            2>&1 | tee plan_output.txt
+        continue-on-error: true
+        # Plan có thể fail nếu không có đủ credentials trong CI
+        # continue-on-error = true để không block pipeline
+
+      - name: "💬 Comment Plan Output on PR"
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const plan = fs.readFileSync('plan_output.txt', 'utf8');
+            const body = `## 📋 Terraform Plan Output\n\`\`\`\n${plan.substring(0, 60000)}\n\`\`\``;
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: body
+            });
